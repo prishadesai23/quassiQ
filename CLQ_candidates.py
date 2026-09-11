@@ -1,55 +1,53 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 from astropy.io import fits
 import numpy as np
 import pandas as pd
 
 fits_file = "QSO_cat_iron_cumulative_v0.fits"
 
-# Load FITS table
 with fits.open(fits_file) as hdul:
-    # prevents potential FITS byte-order/endianness issues in pandas
     data = np.ascontiguousarray(hdul[1].data)
 
 df = pd.DataFrame(data)
-print(f"Initial row count: {len(df)}")
+print("Initial Data")
+print(f"Rows: {len(df)}")
+print(f"Unique TARGETIDs: {df['TARGETID'].nunique()}\n")
 
-# Quality Filtering (ZWARN & COADD_FIBERSTATUS)
-df = df[df['ZWARN'].isin([0, 4])]
-df = df[df['COADD_FIBERSTATUS'] == 0]
-print(f"Rows after quality filtering: {len(df)}")
+# Keep ONLY ZWARN == 0 & COADD_FIBERSTATUS == 0
+df = df[(df['ZWARN'] == 0) & (df['COADD_FIBERSTATUS'] == 0)]
+print("After Quality Filtering (ZWARN=0, FIBERSTATUS=0)")
+print(f"Rows: {len(df)}")
+print(f"Unique TARGETIDs: {df['TARGETID'].nunique()}\n")
 
-# Redshift Filtering (2.1 <= Z <= 3.5), keep TARGETIDs that have at least one valid observation in this range
-mask_z = (df['Z'] >= 2.1) & (df['Z'] <= 3.5)
-valid_z_ids = df.loc[mask_z, 'TARGETID'].unique()
-df = df[df['TARGETID'].isin(valid_z_ids)]
-print(f"Rows after redshift filtering: {len(df)}")
+# Redshift Filtering (keep only individual observations where 2.1 <= Z <= 3.5)
+df = df[(df['Z'] >= 2.1) & (df['Z'] <= 3.5)]
+print("After Redshift Filtering (2.1 <= Z <= 3.5)")
+print(f"Rows: {len(df)}")
+print(f"Unique TARGETIDs: {df['TARGETID'].nunique()}\n")
 
-# Filter for Duplicate Observations, keep TARGETIDs that have more than one valid observation remaining
-df = df[df['TARGETID'].duplicated(keep=False)]
-print(f"Rows with multiple observations: {len(df)}")
+# Datetime Conversion & Calculate Duration/Observation Count
+df['LASTNIGHT'] = pd.to_datetime(df['LASTNIGHT'].astype(str), format='%Y%m%d')
 
-# Datetime Conversion & Duration Calculation
-df['LASTNIGHT'] = pd.to_datetime(df['LASTNIGHT'], format='%Y%m%d')
-
-duration_df = df.groupby('TARGETID')['LASTNIGHT'].agg(['min', 'max'])
+# Group by TARGETID to find the min, max, and count of remaining observations
+duration_df = df.groupby('TARGETID')['LASTNIGHT'].agg(['min', 'max', 'count'])
 duration_df['duration_days'] = (duration_df['max'] - duration_df['min']).dt.days
 
-# Merge duration back to main DataFrame
-df = df.merge(duration_df['duration_days'], on='TARGETID')
+# Keep targets with MORE than 1 observation AND a duration of AT LEAST 7 days
+valid_targets = duration_df[(duration_df['count'] > 1) & (duration_df['duration_days'] >= 7)]
 
-# Filter by Minimum Duration (>= 30 days)
-valid_duration_ids = df.loc[df['duration_days'] >= 30, 'TARGETID'].unique()
-df = df[df['TARGETID'].isin(valid_duration_ids)]
+df = df[df['TARGETID'].isin(valid_targets.index)]
 
-# Final Sort & Export
+df = df.merge(valid_targets[['duration_days']], on='TARGETID')
+
+print("After >1 Observation & >= 7 Days Duration Filtering")
+print(f"Rows: {len(df)}")
+print(f"Unique TARGETIDs: {df['TARGETID'].nunique()}\n")
+
 df = df.sort_values(['duration_days', 'TARGETID'], ascending=[False, True])
 
 output_csv = "CLQ_candidates.csv"
 df.to_csv(output_csv, index=False)
 
-print("\n Summary")
+print("Final Summary")
 print(f"Saved final candidates to: {output_csv}")
 print(f"Final remaining rows: {len(df)}")
 print(f"Final unique TARGETIDs: {df['TARGETID'].nunique()}")
